@@ -1,0 +1,13 @@
+{
+  "name": "space-shooter-game",
+  "version": "1.0.0",
+  "description": "A web-based space shooter game",
+  "main": "index.html",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "serve": "python -m http.server 8000"
+  },
+  "keywords": ["game", "javascript", "html5", "canvas"],
+  "author": "Developer",
+  "license": "MIT"
+}

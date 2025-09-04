@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Shooter Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <div class="ui">
+            <div class="score">Score: <span id="score">0</span></div>
+            <div class="lives">Lives: <span id="lives">3</span></div>
+        </div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div class="game-over" id="gameOver">
+            <h2>Game Over!</h2>
+            <p>Final Score: <span id="finalScore">0</span></p>
+            <button onclick="restartGame()">Play Again</button>
+        </div>
+        <div class="instructions">
+            <p>Use ARROW KEYS to move • SPACEBAR to shoot</p>
+        </div>
+        
+        <!-- Character Selection Screen -->
+        <div class="character-select-screen" id="characterSelectScreen">
+            <div class="character-select-content">
+                <h1 class="selection-title">SELECT YOUR THEME</h1>
+                
+                <!-- Theme Selection -->
+                <div class="theme-selection">
+                    <div class="theme-carousel">
+                        <button class="carousel-nav prev" id="themePrev">‹</button>
+                        
+                        <div class="theme-cards-container">
+                            <div class="theme-card active" data-theme="masked-rider">
+                                <div class="theme-preview">
+                                    <div class="theme-background masked-rider-bg"></div>
+                                    <div class="theme-icon">🏍️</div>
+                                </div>
+                                <h3 class="theme-name">Masked Rider</h3>
+                                <p class="theme-description">High-speed combat with motorcycle-inspired designs</p>
+                            </div>
+                            
+                            <div class="theme-card" data-theme="ultraman">
+                                <div class="theme-preview">
+                                    <div class="theme-background ultraman-bg"></div>
+                                    <div class="theme-icon">⚡</div>
+                                </div>
+                                <h3 class="theme-name">Ultraman</h3>
+                                <p class="theme-description">Heroic power with ultra-tech weaponry</p>
+                            </div>
+                            
+                            <div class="theme-card" data-theme="godzilla">
+                                <div class="theme-preview">
+                                    <div class="theme-background godzilla-bg"></div>
+                                    <div class="theme-icon">🦖</div>
+                                </div>
+                                <h3 class="theme-name">Godzilla</h3>
+                                <p class="theme-description">Monster-inspired designs with raw power</p>
+                            </div>
+                        </div>
+                        
+                        <button class="carousel-nav next" id="themeNext">›</button>
+                    </div>
+                </div>
+                
+                <!-- Spaceship Selection -->
+                <div class="spaceship-selection">
+                    <h2 class="spaceship-title">CHOOSE YOUR SPACESHIP</h2>
+                    <div class="spaceship-grid" id="spaceshipGrid">
+                        <!-- Spaceship options will be populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <!-- Preview Area -->
+                <div class="preview-area">
+                    <div class="preview-canvas-container">
+                        <canvas id="previewCanvas" width="200" height="150"></canvas>
+                        <div class="preview-label">Preview</div>
+                    </div>
+                    <div class="selection-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">Speed:</span>
+                            <div class="stat-bar">
+                                <div class="stat-fill" id="speedStat"></div>
+                            </div>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Fire Rate:</span>
+                            <div class="stat-bar">
+                                <div class="stat-fill" id="fireRateStat"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Navigation Buttons -->
+                <div class="selection-buttons">
+                    <button class="nav-button back-button" id="backToIntro">← BACK</button>
+                    <button class="nav-button confirm-button" id="confirmSelection">START GAME →</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Introduction Screen -->
+        <div class="intro-screen" id="introScreen">
+            <div class="intro-content">
+                <h1 class="game-title">SPACE SHOOTER</h1>
+                <div class="intro-sections">
+                    <div class="controls-section">
+                        <h2>Controls</h2>
+                        <div class="control-item">
+                            <span class="key">↑ ↓ ← →</span>
+                            <span class="description">Move your spaceship</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="key">SPACEBAR</span>
+                            <span class="description">Fire bullets</span>
+                        </div>
+                        <div class="control-item">
+                            <span class="key">ESC</span>
+                            <span class="description">Pause game</span>
+                        </div>
+                    </div>
+                    
+                    <div class="game-info-section">
+                        <h2>Game Mechanics</h2>
+                        <div class="info-item">
+                            <span class="label">Lives:</span>
+                            <span class="value">You start with 3 lives</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Scoring:</span>
+                            <span class="value">10 points per enemy destroyed</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Difficulty:</span>
+                            <span class="value">Enemy spawn rate increases over time</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Power-ups Section -->
+                <div class="powerups-section">
+                    <h2>Power-ups Guide</h2>
+                    <div class="powerups-container">
+                        <div class="powerup-tabs">
+                            <button class="tab-button active" data-tab="offensive">Offensive</button>
+                            <button class="tab-button" data-tab="defensive">Defensive</button>
+                            <button class="tab-button" data-tab="utility">Utility</button>
+                        </div>
+                        
+                        <div class="powerup-content">
+                            <div class="tab-content active" id="offensive">
+                                <div class="powerup-item">
+                                    <div class="powerup-icon rapid-fire">🔥</div>
+                                    <div class="powerup-details">
+                                        <h3>Rapid Fire</h3>
+                                        <p>Increases firing rate by 300% for 10 seconds</p>
+                                    </div>
+                                </div>
+                                <div class="powerup-item">
+                                    <div class="powerup-icon multi-shot">⚡</div>
+                                    <div class="powerup-details">
+                                        <h3>Multi-Shot</h3>
+                                        <p>Fires 3 bullets in spread pattern for 15 seconds</p>
+                                    </div>
+                                </div>
+                                <div class="powerup-item">
+                                    <div class="powerup-icon laser-beam">🔴</div>
+                                    <div class="powerup-details">
+                                        <h3>Laser Beam</h3>
+                                        <p>Continuous laser beam for 8 seconds</p>
+                                    </div>
+                                </div>
+                                <div class="powerup-item">
+                                    <div class="powerup-icon explosive">💥</div>
+                                    <div class="powerup-details">
+                                        <h3>Explosive Rounds</h3>
+                                        <p>Area-of-effect explosions for 20 seconds</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="tab-content" id="defensive">
+                                <div class="powerup-item">
+                                    <div class="powerup-icon shield">🛡️</div>
+                                    <div class="powerup-details">
+                                        <h3>Shield Generator</h3>
+                                        <p>Temporary invincibility for 5 seconds</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="tab-content" id="utility">
+                                <div class="powerup-item">
+                                    <div class="powerup-icon time-slow">⏰</div>
+                                    <div class="powerup-details">
+                                        <h3>Time Slow</h3>
+                                        <p>Reduces enemy speed by 50% for 12 seconds</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="start-button" id="startButton">START GAME</button>
+            </div>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
