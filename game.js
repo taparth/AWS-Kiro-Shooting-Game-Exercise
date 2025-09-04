@@ -54,10 +54,27 @@ const player = {
     height: 30,
     speed: GAME_CONFIG.PLAYER_SPEED,
     color: '#00ffff',
+    rapidFireActive: false,
+    multiShotActive: false,
+    laserBeamActive: false,
+    shieldActive: false,
+    invincible: false,
+    timeSlowActive: false,
+    explosiveRoundsActive: false,
     
     reset() {
         this.x = GAME_CONFIG.CANVAS_WIDTH / 2 - 15;
         this.y = GAME_CONFIG.CANVAS_HEIGHT - 50;
+        this.rapidFireActive = false;
+        this.multiShotActive = false;
+        this.laserBeamActive = false;
+        this.shieldActive = false;
+        this.invincible = false;
+        this.timeSlowActive = false;
+        this.explosiveRoundsActive = false;
+        
+        // Reset time slow multiplier
+        window.timeSlowMultiplier = 1.0;
     }
 };
 
@@ -65,6 +82,14 @@ const player = {
 let bullets = [];
 let enemies = [];
 let particles = [];
+let powerUps = [];
+
+// ===== LASER SYSTEM =====
+let laserActive = false;
+let laserBeam = null;
+
+// ===== TIME SLOW SYSTEM =====
+window.timeSlowMultiplier = 1.0; // Global time multiplier for enemy movement
 
 // ===== GAME TIMING =====
 let lastEnemySpawn = 0;
@@ -1229,12 +1254,18 @@ class GameState extends State {
         bullets = [];
         enemies = [];
         particles = [];
+        powerUps = [];
         lastEnemySpawn = 0;
         enemySpawnRate = GAME_CONFIG.INITIAL_ENEMY_SPAWN_RATE;
         
         // Reset player position
         if (player && player.reset) {
             player.reset();
+        }
+        
+        // Clear all active power-ups
+        if (powerUpManager && powerUpManager.initialized) {
+            powerUpManager.clearAllPowerUps();
         }
         
         // Update UI elements
@@ -1266,7 +1297,18 @@ class GameState extends State {
         // Update particles
         updateParticles();
         
+        // Update power-ups
+        updatePowerUps();
+        
+        // Update power-up manager (handle duration and expiration)
+        if (powerUpManager && powerUpManager.initialized) {
+            powerUpManager.updatePowerUps();
+        }
+        
         checkCollisions();
+        
+        // Check power-up collisions
+        checkPowerUpCollisions();
         
         // Check for game over
         if (lives <= 0) {
@@ -1486,17 +1528,23 @@ class GameOverState extends State {
 
 // Bullet class
 class Bullet {
-    constructor(x, y) {
+    constructor(x, y, velX = 0, velY = -GAME_CONFIG.BULLET_SPEED) {
         this.x = x || 0;
         this.y = y || 0;
         this.width = 4;
         this.height = 10;
         this.speed = GAME_CONFIG.BULLET_SPEED;
         this.color = '#ffff00';
+        
+        // Velocity-based movement for angled bullets
+        this.velX = velX;
+        this.velY = velY;
     }
 
     update() {
-        this.y -= this.speed;
+        // Use velocity-based movement
+        this.x += this.velX;
+        this.y += this.velY;
     }
 
     draw() {
@@ -1517,6 +1565,157 @@ class Bullet {
     }
 }
 
+// LaserBeam class for continuous laser weapon
+class LaserBeam {
+    constructor() {
+        this.active = false;
+        this.width = 8;
+        this.intensity = 1.0;
+        this.pulseTime = 0;
+        this.color = '#6b00ff';
+        this.damage = 1; // Damage per frame to enemies
+    }
+    
+    activate() {
+        this.active = true;
+        this.pulseTime = 0;
+    }
+    
+    deactivate() {
+        this.active = false;
+    }
+    
+    update() {
+        if (!this.active) return;
+        
+        this.pulseTime += 0.1;
+        this.intensity = 0.8 + Math.sin(this.pulseTime * 2) * 0.2;
+        
+        // Check laser collision with enemies
+        this.checkLaserCollisions();
+    }
+    
+    checkLaserCollisions() {
+        if (!this.active || !player) return;
+        
+        const laserX = player.x + player.width / 2 - this.width / 2;
+        const laserY = 0;
+        const laserWidth = this.width;
+        const laserHeight = player.y;
+        
+        // Check collision with all enemies
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            if (enemy &&
+                enemy.x < laserX + laserWidth &&
+                enemy.x + enemy.width > laserX &&
+                enemy.y < laserY + laserHeight &&
+                enemy.y + enemy.height > laserY) {
+                
+                // Damage enemy
+                enemy.takeDamage(this.damage);
+                
+                // Create laser hit particles
+                this.createLaserHitEffect(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+                
+                // Remove enemy if destroyed
+                if (enemy.isDestroyed()) {
+                    createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+                    enemies.splice(i, 1);
+                    score += 10;
+                    
+                    // Spawn power-up with 15% chance
+                    if (Math.random() < 0.15) {
+                        spawnPowerUp(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+                    }
+                }
+            }
+        }
+    }
+    
+    createLaserHitEffect(x, y) {
+        try {
+            // Create sparking particles at laser hit point
+            for (let i = 0; i < 5; i++) {
+                const particle = {
+                    x: x + (Math.random() - 0.5) * 10,
+                    y: y + (Math.random() - 0.5) * 10,
+                    velX: (Math.random() - 0.5) * 4,
+                    velY: (Math.random() - 0.5) * 4,
+                    life: 20,
+                    maxLife: 20,
+                    color: '#ffffff',
+                    size: Math.random() * 3 + 1
+                };
+                particles.push(particle);
+            }
+        } catch (error) {
+            console.error('Laser hit effect error:', error);
+        }
+    }
+    
+    draw() {
+        if (!this.active || !ctx || !player) return;
+        
+        try {
+            const centerX = player.x + player.width / 2;
+            const laserX = centerX - this.width / 2;
+            const laserY = 0;
+            const laserHeight = player.y;
+            
+            // Draw laser beam with gradient and glow
+            const gradient = ctx.createLinearGradient(laserX, laserY, laserX, laserHeight);
+            gradient.addColorStop(0, this.color + '00');
+            gradient.addColorStop(0.1, this.color + 'AA');
+            gradient.addColorStop(0.9, this.color + 'FF');
+            gradient.addColorStop(1, this.color + 'AA');
+            
+            // Main laser beam
+            ctx.fillStyle = gradient;
+            ctx.fillRect(laserX, laserY, this.width, laserHeight);
+            
+            // Outer glow
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 15 * this.intensity;
+            ctx.fillRect(laserX, laserY, this.width, laserHeight);
+            ctx.shadowBlur = 0;
+            
+            // Inner core (brighter)
+            const coreWidth = this.width * 0.4;
+            const coreX = centerX - coreWidth / 2;
+            ctx.fillStyle = '#ffffff';
+            ctx.globalAlpha = this.intensity * 0.8;
+            ctx.fillRect(coreX, laserY, coreWidth, laserHeight);
+            ctx.globalAlpha = 1;
+            
+            // Laser muzzle effect at player position
+            this.drawMuzzleEffect(centerX, player.y);
+            
+        } catch (error) {
+            console.error('Laser beam draw error:', error);
+        }
+    }
+    
+    drawMuzzleEffect(x, y) {
+        try {
+            // Pulsing energy at the laser source
+            const radius = 8 + Math.sin(this.pulseTime * 3) * 3;
+            
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(0.5, this.color);
+            gradient.addColorStop(1, this.color + '00');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+        } catch (error) {
+            console.error('Laser muzzle effect error:', error);
+        }
+    }
+}
+
 // Enemy class
 class Enemy {
     constructor() {
@@ -1527,10 +1726,17 @@ class Enemy {
         this.height = 30;
         this.speed = Math.random() * 2 + 1;
         this.color = '#ff0000';
+        
+        // Health system properties
+        this.maxHealth = Math.floor(Math.random() * 3) + 2; // 2-4 health points
+        this.currentHealth = this.maxHealth;
+        this.healthBarVisible = false;
     }
 
     update() {
-        this.y += this.speed;
+        // Apply time slow multiplier to enemy movement
+        const effectiveSpeed = this.speed * (window.timeSlowMultiplier || 1.0);
+        this.y += effectiveSpeed;
     }
 
     draw() {
@@ -1545,8 +1751,87 @@ class Enemy {
             ctx.shadowBlur = 8;
             ctx.fillRect(this.x, this.y, this.width, this.height);
             ctx.shadowBlur = 0;
+            
+            // Draw health bar if visible
+            if (this.healthBarVisible) {
+                this.drawHealthBar();
+            }
         } catch (error) {
             console.error('Enemy draw error:', error);
+        }
+    }
+    
+    // Take damage and return true if enemy should be destroyed
+    takeDamage(amount = 1) {
+        try {
+            this.currentHealth -= amount;
+            
+            // Show health bar when enemy takes damage
+            this.healthBarVisible = true;
+            
+            // Clamp health to 0 minimum
+            if (this.currentHealth < 0) {
+                this.currentHealth = 0;
+            }
+            
+            return this.isDestroyed();
+        } catch (error) {
+            console.error('Enemy takeDamage error:', error);
+            return false;
+        }
+    }
+    
+    // Check if enemy should be removed from game
+    isDestroyed() {
+        return this.currentHealth <= 0;
+    }
+    
+    // Update health bar visibility based on health status
+    updateHealthBarVisibility() {
+        // Hide health bar if enemy has full health
+        if (this.currentHealth >= this.maxHealth) {
+            this.healthBarVisible = false;
+        }
+    }
+    
+    // Draw health bar above enemy
+    drawHealthBar() {
+        try {
+            if (!ctx) return;
+            
+            const barWidth = this.width;
+            const barHeight = 4;
+            const barX = this.x;
+            const barY = this.y - 8;
+            
+            // Background bar (dark)
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            
+            // Health bar color based on health percentage
+            const healthPercent = this.currentHealth / this.maxHealth;
+            let healthColor;
+            
+            if (healthPercent > 0.6) {
+                healthColor = '#00ff00'; // Green
+            } else if (healthPercent > 0.3) {
+                healthColor = '#ffff00'; // Yellow
+            } else {
+                healthColor = '#ff0000'; // Red
+            }
+            
+            // Health bar fill
+            const fillWidth = barWidth * healthPercent;
+            ctx.fillStyle = healthColor;
+            ctx.fillRect(barX, barY, fillWidth, barHeight);
+            
+            // Health bar border
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(barX, barY, barWidth, barHeight);
+            
+        } catch (error) {
+            console.error('Enemy drawHealthBar error:', error);
         }
     }
 }
@@ -1583,6 +1868,615 @@ class Particle {
         } catch (error) {
             console.error('Particle draw error:', error);
         }
+    }
+}
+
+// ===== POWER-UP SYSTEM =====
+
+// Power-up type definitions
+const POWER_UP_TYPES = {
+    RAPID_FIRE: {
+        name: "Rapid Fire",
+        description: "Increases firing rate by 300%",
+        duration: 10000, // 10 seconds
+        color: "#ff6b00",
+        icon: "R"
+    },
+    MULTI_SHOT: {
+        name: "Multi-Shot", 
+        description: "Fires 3 bullets in spread pattern",
+        duration: 15000, // 15 seconds
+        color: "#00ff6b",
+        icon: "M"
+    },
+    LASER_BEAM: {
+        name: "Laser Beam",
+        description: "Continuous laser beam",
+        duration: 8000, // 8 seconds
+        color: "#6b00ff",
+        icon: "L"
+    },
+    SHIELD_GENERATOR: {
+        name: "Shield Generator",
+        description: "Temporary invincibility",
+        duration: 5000, // 5 seconds
+        color: "#00ffff",
+        icon: "S"
+    },
+    TIME_SLOW: {
+        name: "Time Slow",
+        description: "Reduces enemy speed by 50%",
+        duration: 12000, // 12 seconds
+        color: "#ffff00",
+        icon: "T"
+    },
+    EXPLOSIVE_ROUNDS: {
+        name: "Explosive Rounds",
+        description: "Area-of-effect explosions",
+        duration: 20000, // 20 seconds
+        color: "#ff0066",
+        icon: "E"
+    }
+};
+
+// PowerUp class
+class PowerUp {
+    constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.width = 20;
+        this.height = 20;
+        this.speed = 2;
+        this.type = type;
+        this.typeConfig = POWER_UP_TYPES[type];
+        this.collected = false;
+        
+        // Visual properties
+        this.pulseTime = 0;
+        this.glowIntensity = 0;
+        
+        // Validate type
+        if (!this.typeConfig) {
+            console.warn(`Unknown power-up type: ${type}`);
+            this.typeConfig = POWER_UP_TYPES.RAPID_FIRE; // Default fallback
+        }
+    }
+    
+    update() {
+        try {
+            // Move down the screen
+            this.y += this.speed;
+            
+            // Update visual effects
+            this.pulseTime += 0.1;
+            this.glowIntensity = Math.sin(this.pulseTime) * 0.5 + 0.5;
+            
+        } catch (error) {
+            console.error('PowerUp update error:', error);
+        }
+    }
+    
+    draw() {
+        try {
+            if (!ctx || this.collected) return;
+            
+            const centerX = this.x + this.width / 2;
+            const centerY = this.y + this.height / 2;
+            
+            // Draw glow effect
+            const glowRadius = 15 + (this.glowIntensity * 5);
+            const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowRadius);
+            gradient.addColorStop(0, this.typeConfig.color + '80');
+            gradient.addColorStop(0.7, this.typeConfig.color + '40');
+            gradient.addColorStop(1, this.typeConfig.color + '00');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(this.x - 10, this.y - 10, this.width + 20, this.height + 20);
+            
+            // Draw main power-up body
+            ctx.fillStyle = this.typeConfig.color;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            
+            // Draw border
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(this.x, this.y, this.width, this.height);
+            
+            // Draw icon/letter
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(this.typeConfig.icon, centerX, centerY);
+            
+            // Add pulsing shadow effect
+            ctx.shadowColor = this.typeConfig.color;
+            ctx.shadowBlur = 10 + (this.glowIntensity * 10);
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.shadowBlur = 0;
+            
+        } catch (error) {
+            console.error('PowerUp draw error:', error);
+        }
+    }
+    
+    // Check if power-up is off screen
+    isOffScreen() {
+        const canvasHeight = canvas ? canvas.height : GAME_CONFIG.CANVAS_HEIGHT;
+        return this.y > canvasHeight;
+    }
+    
+    // Get bounding box for collision detection
+    getBounds() {
+        return {
+            x: this.x,
+            y: this.y,
+            width: this.width,
+            height: this.height
+        };
+    }
+    
+    // Mark as collected
+    collect() {
+        this.collected = true;
+    }
+}
+
+// Power-up spawning system
+function spawnPowerUp(x, y) {
+    try {
+        // 15% chance to spawn a power-up
+        if (Math.random() > 0.15) {
+            return false;
+        }
+        
+        // Randomly select a power-up type
+        const typeKeys = Object.keys(POWER_UP_TYPES);
+        const randomType = typeKeys[Math.floor(Math.random() * typeKeys.length)];
+        
+        // Create and add power-up
+        const powerUp = new PowerUp(x, y, randomType);
+        powerUps.push(powerUp);
+        
+        console.log(`Power-up spawned: ${powerUp.typeConfig.name} at (${x}, ${y})`);
+        return true;
+        
+    } catch (error) {
+        console.error('Power-up spawning error:', error);
+        return false;
+    }
+}
+
+// Update all power-ups
+function updatePowerUps() {
+    try {
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            if (powerUps[i]) {
+                powerUps[i].update();
+                
+                // Remove power-ups that are off screen or collected
+                if (powerUps[i].isOffScreen() || powerUps[i].collected) {
+                    powerUps.splice(i, 1);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Power-up update error:', error);
+    }
+}
+
+// PowerUpManager class for handling active power-up effects
+class PowerUpManager {
+    constructor() {
+        this.activePowerUps = new Map(); // Map of type -> effect data
+        this.initialized = false;
+    }
+    
+    // Initialize the power-up manager
+    initialize() {
+        try {
+            this.activePowerUps.clear();
+            this.initialized = true;
+            console.log('PowerUpManager initialized');
+            return true;
+        } catch (error) {
+            console.error('PowerUpManager initialization failed:', error);
+            return false;
+        }
+    }
+    
+    // Add a power-up effect
+    addPowerUp(type) {
+        try {
+            if (!type || !POWER_UP_TYPES[type]) {
+                throw new Error(`Invalid power-up type: ${type}`);
+            }
+            
+            const typeConfig = POWER_UP_TYPES[type];
+            const now = Date.now();
+            
+            // Check if this power-up type is already active
+            if (this.activePowerUps.has(type)) {
+                // Refresh the duration instead of stacking
+                const existingEffect = this.activePowerUps.get(type);
+                existingEffect.endTime = now + typeConfig.duration;
+                console.log(`Power-up refreshed: ${typeConfig.name}`);
+            } else {
+                // Add new power-up effect
+                const effect = {
+                    type: type,
+                    config: typeConfig,
+                    startTime: now,
+                    endTime: now + typeConfig.duration,
+                    active: true
+                };
+                
+                this.activePowerUps.set(type, effect);
+                this.applyPowerUpEffect(type, true);
+                console.log(`Power-up activated: ${typeConfig.name} for ${typeConfig.duration}ms`);
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Power-up addition failed:', error);
+            return false;
+        }
+    }
+    
+    // Remove a power-up effect
+    removePowerUp(type) {
+        try {
+            if (!this.activePowerUps.has(type)) {
+                return false;
+            }
+            
+            const effect = this.activePowerUps.get(type);
+            this.applyPowerUpEffect(type, false);
+            this.activePowerUps.delete(type);
+            
+            console.log(`Power-up deactivated: ${effect.config.name}`);
+            return true;
+        } catch (error) {
+            console.error('Power-up removal failed:', error);
+            return false;
+        }
+    }
+    
+    // Update all active power-ups (check for expiration)
+    updatePowerUps() {
+        try {
+            const now = Date.now();
+            const expiredTypes = [];
+            
+            // Check for expired power-ups
+            for (const [type, effect] of this.activePowerUps) {
+                if (now >= effect.endTime) {
+                    expiredTypes.push(type);
+                }
+            }
+            
+            // Remove expired power-ups
+            expiredTypes.forEach(type => {
+                this.removePowerUp(type);
+            });
+            
+        } catch (error) {
+            console.error('Power-up update failed:', error);
+        }
+    }
+    
+    // Apply or remove power-up effects
+    applyPowerUpEffect(type, activate) {
+        try {
+            switch (type) {
+                case 'RAPID_FIRE':
+                    if (activate) {
+                        console.log('Rapid Fire activated - Fire rate increased by 300%');
+                        // Effect is handled in getCurrentShootCooldown() function
+                        // Visual feedback could be added here (e.g., player glow effect)
+                        this.addRapidFireVisualEffect();
+                    } else {
+                        console.log('Rapid Fire deactivated - Fire rate returned to normal');
+                        this.removeRapidFireVisualEffect();
+                    }
+                    break;
+                    
+                case 'MULTI_SHOT':
+                    if (activate) {
+                        console.log('Multi-Shot activated - Firing 3 bullets in spread pattern');
+                        this.addMultiShotVisualEffect();
+                    } else {
+                        console.log('Multi-Shot deactivated - Returning to single bullet');
+                        this.removeMultiShotVisualEffect();
+                    }
+                    break;
+                    
+                case 'LASER_BEAM':
+                    if (activate) {
+                        console.log('Laser Beam activated - Continuous laser weapon enabled');
+                        this.activateLaserBeam();
+                    } else {
+                        console.log('Laser Beam deactivated - Returning to bullet weapons');
+                        this.deactivateLaserBeam();
+                    }
+                    break;
+                    
+                case 'SHIELD_GENERATOR':
+                    if (activate) {
+                        console.log('Shield Generator activated - Player is now invincible');
+                        this.activateShield();
+                    } else {
+                        console.log('Shield Generator deactivated - Player vulnerability restored');
+                        this.deactivateShield();
+                    }
+                    break;
+                    
+                case 'TIME_SLOW':
+                    if (activate) {
+                        console.log('Time Slow activated - Enemy movement reduced by 50%');
+                        this.activateTimeSlow();
+                    } else {
+                        console.log('Time Slow deactivated - Enemy movement restored to normal');
+                        this.deactivateTimeSlow();
+                    }
+                    break;
+                    
+                case 'EXPLOSIVE_ROUNDS':
+                    if (activate) {
+                        console.log('Explosive Rounds activated - Bullets now create area-of-effect explosions');
+                        this.activateExplosiveRounds();
+                    } else {
+                        console.log('Explosive Rounds deactivated - Bullets return to normal damage');
+                        this.deactivateExplosiveRounds();
+                    }
+                    break;
+                    
+                default:
+                    console.warn(`Unknown power-up type for effect application: ${type}`);
+            }
+        } catch (error) {
+            console.error('Power-up effect application failed:', error);
+        }
+    }
+    
+    // Get all active power-ups
+    getActivePowerUps() {
+        return Array.from(this.activePowerUps.values());
+    }
+    
+    // Check if a specific power-up is active
+    isPowerUpActive(type) {
+        return this.activePowerUps.has(type);
+    }
+    
+    // Get remaining time for a power-up
+    getRemainingTime(type) {
+        if (!this.activePowerUps.has(type)) {
+            return 0;
+        }
+        
+        const effect = this.activePowerUps.get(type);
+        const now = Date.now();
+        return Math.max(0, effect.endTime - now);
+    }
+    
+    // Clear all active power-ups (for game reset)
+    clearAllPowerUps() {
+        try {
+            // Deactivate all effects before clearing
+            for (const type of this.activePowerUps.keys()) {
+                this.applyPowerUpEffect(type, false);
+            }
+            
+            // Ensure laser beam is deactivated
+            if (laserBeam) {
+                laserBeam.deactivate();
+            }
+            laserActive = false;
+            
+            // Reset time slow multiplier
+            window.timeSlowMultiplier = 1.0;
+            
+            this.activePowerUps.clear();
+            console.log('All power-ups cleared');
+            return true;
+        } catch (error) {
+            console.error('Power-up clearing failed:', error);
+            return false;
+        }
+    }
+    
+    // Get power-up count
+    getActivePowerUpCount() {
+        return this.activePowerUps.size;
+    }
+    
+    // Add visual effect for Rapid Fire power-up
+    addRapidFireVisualEffect() {
+        try {
+            // Add a visual indicator that rapid fire is active
+            // This could be a glow effect around the player or weapon trails
+            if (player) {
+                player.rapidFireActive = true;
+            }
+        } catch (error) {
+            console.error('Rapid Fire visual effect error:', error);
+        }
+    }
+    
+    // Remove visual effect for Rapid Fire power-up
+    removeRapidFireVisualEffect() {
+        try {
+            if (player) {
+                player.rapidFireActive = false;
+            }
+        } catch (error) {
+            console.error('Rapid Fire visual effect removal error:', error);
+        }
+    }
+    
+    // Add visual effect for Multi-Shot power-up
+    addMultiShotVisualEffect() {
+        try {
+            if (player) {
+                player.multiShotActive = true;
+            }
+        } catch (error) {
+            console.error('Multi-Shot visual effect error:', error);
+        }
+    }
+    
+    // Remove visual effect for Multi-Shot power-up
+    removeMultiShotVisualEffect() {
+        try {
+            if (player) {
+                player.multiShotActive = false;
+            }
+        } catch (error) {
+            console.error('Multi-Shot visual effect removal error:', error);
+        }
+    }
+    
+    // Activate laser beam system
+    activateLaserBeam() {
+        try {
+            if (!laserBeam) {
+                laserBeam = new LaserBeam();
+            }
+            laserBeam.activate();
+            laserActive = true;
+            
+            if (player) {
+                player.laserBeamActive = true;
+            }
+        } catch (error) {
+            console.error('Laser beam activation error:', error);
+        }
+    }
+    
+    // Deactivate laser beam system
+    deactivateLaserBeam() {
+        try {
+            if (laserBeam) {
+                laserBeam.deactivate();
+            }
+            laserActive = false;
+            
+            if (player) {
+                player.laserBeamActive = false;
+            }
+        } catch (error) {
+            console.error('Laser beam deactivation error:', error);
+        }
+    }
+    
+    // Activate shield generator
+    activateShield() {
+        try {
+            if (player) {
+                player.shieldActive = true;
+                player.invincible = true;
+            }
+        } catch (error) {
+            console.error('Shield activation error:', error);
+        }
+    }
+    
+    // Deactivate shield generator
+    deactivateShield() {
+        try {
+            if (player) {
+                player.shieldActive = false;
+                player.invincible = false;
+            }
+        } catch (error) {
+            console.error('Shield deactivation error:', error);
+        }
+    }
+    
+    // Activate time slow effect
+    activateTimeSlow() {
+        try {
+            // Set global time slow multiplier
+            window.timeSlowMultiplier = 0.5; // 50% speed reduction
+            
+            if (player) {
+                player.timeSlowActive = true;
+            }
+        } catch (error) {
+            console.error('Time slow activation error:', error);
+        }
+    }
+    
+    // Deactivate time slow effect
+    deactivateTimeSlow() {
+        try {
+            // Reset time slow multiplier
+            window.timeSlowMultiplier = 1.0; // Normal speed
+            
+            if (player) {
+                player.timeSlowActive = false;
+            }
+        } catch (error) {
+            console.error('Time slow deactivation error:', error);
+        }
+    }
+    
+    // Activate explosive rounds
+    activateExplosiveRounds() {
+        try {
+            if (player) {
+                player.explosiveRoundsActive = true;
+            }
+        } catch (error) {
+            console.error('Explosive rounds activation error:', error);
+        }
+    }
+    
+    // Deactivate explosive rounds
+    deactivateExplosiveRounds() {
+        try {
+            if (player) {
+                player.explosiveRoundsActive = false;
+            }
+        } catch (error) {
+            console.error('Explosive rounds deactivation error:', error);
+        }
+    }
+}
+
+// Global power-up manager instance
+let powerUpManager = null;
+
+// Check power-up collection collisions
+function checkPowerUpCollisions() {
+    try {
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            const powerUp = powerUps[i];
+            if (!powerUp || powerUp.collected) continue;
+            
+            // Check collision with player
+            if (powerUp.x < player.x + player.width &&
+                powerUp.x + powerUp.width > player.x &&
+                powerUp.y < player.y + player.height &&
+                powerUp.y + powerUp.height > player.y) {
+                
+                // Collect the power-up
+                powerUp.collect();
+                
+                // Apply power-up effect through manager
+                if (powerUpManager && powerUpManager.initialized) {
+                    powerUpManager.addPowerUp(powerUp.type);
+                }
+                
+                console.log(`Power-up collected: ${powerUp.typeConfig.name}`);
+                
+                // Remove from array
+                powerUps.splice(i, 1);
+            }
+        }
+    } catch (error) {
+        console.error('Power-up collision detection error:', error);
     }
 }
 
@@ -2419,6 +3313,116 @@ function createExplosion(x, y) {
     }
 }
 
+// Create shield impact effect
+function createShieldImpactEffect(x, y) {
+    try {
+        // Create cyan/blue particles for shield deflection
+        for (let i = 0; i < 20; i++) {
+            const particle = new Particle(x, y);
+            // Override particle properties for shield effect
+            particle.color = `hsl(${180 + Math.random() * 60}, 100%, ${50 + Math.random() * 30}%)`;
+            particle.velX = (Math.random() - 0.5) * 8;
+            particle.velY = (Math.random() - 0.5) * 8;
+            particle.life = 25;
+            particle.maxLife = 25;
+            particles.push(particle);
+        }
+        
+        // Create electric arc effects
+        for (let i = 0; i < 8; i++) {
+            const particle = new Particle(x + (Math.random() - 0.5) * 20, y + (Math.random() - 0.5) * 20);
+            particle.color = '#00ffff';
+            particle.velX = (Math.random() - 0.5) * 4;
+            particle.velY = (Math.random() - 0.5) * 4;
+            particle.life = 15;
+            particle.maxLife = 15;
+            particle.size = Math.random() * 2 + 1;
+            particles.push(particle);
+        }
+    } catch (error) {
+        console.error('Shield impact effect creation error:', error);
+    }
+}
+
+// Apply explosive damage to enemies within radius
+function applyExplosiveDamage(centerX, centerY, radius) {
+    try {
+        const damagedEnemies = [];
+        
+        // Check all enemies for damage within explosion radius
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            if (!enemy) continue;
+            
+            // Calculate distance from explosion center to enemy center
+            const enemyCenterX = enemy.x + enemy.width / 2;
+            const enemyCenterY = enemy.y + enemy.height / 2;
+            const distance = Math.sqrt(
+                Math.pow(centerX - enemyCenterX, 2) + 
+                Math.pow(centerY - enemyCenterY, 2)
+            );
+            
+            // Apply damage if enemy is within explosion radius
+            if (distance <= radius) {
+                // Calculate damage based on distance (closer = more damage)
+                const maxDamage = 3; // Maximum damage at center
+                const minDamage = 1; // Minimum damage at edge
+                const damageRatio = 1 - (distance / radius);
+                const damage = Math.ceil(minDamage + (maxDamage - minDamage) * damageRatio);
+                
+                const enemyDestroyed = enemy.takeDamage(damage);
+                
+                if (enemyDestroyed) {
+                    // Create explosion when enemy is destroyed
+                    createExplosion(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+                    
+                    // Try to spawn power-up at enemy location
+                    spawnPowerUp(enemy.x + enemy.width / 2 - 10, enemy.y + enemy.height / 2 - 10);
+                    
+                    // Remove destroyed enemy
+                    enemies.splice(i, 1);
+                    
+                    // Increase score
+                    updateScore(10);
+                    
+                    damagedEnemies.push({ enemy, destroyed: true, damage });
+                } else {
+                    // Enemy took damage but not destroyed - show health bar
+                    enemy.healthBarVisible = true;
+                    damagedEnemies.push({ enemy, destroyed: false, damage });
+                }
+            }
+        }
+        
+        // Create explosion effect at impact point
+        createExplosion(centerX, centerY);
+        
+        // Create additional explosion particles for area effect
+        const explosionParticles = 25;
+        for (let i = 0; i < explosionParticles; i++) {
+            const angle = (Math.PI * 2 * i) / explosionParticles;
+            const particleRadius = Math.random() * radius * 0.8;
+            const particleX = centerX + Math.cos(angle) * particleRadius;
+            const particleY = centerY + Math.sin(angle) * particleRadius;
+            
+            const particle = new Particle(particleX, particleY);
+            // Make explosion particles more intense
+            particle.color = `hsl(${Math.random() * 60 + 10}, 100%, ${50 + Math.random() * 30}%)`;
+            particle.velX = Math.cos(angle) * (Math.random() * 3 + 1);
+            particle.velY = Math.sin(angle) * (Math.random() * 3 + 1);
+            particle.life = 30 + Math.random() * 20;
+            particle.maxLife = particle.life;
+            particle.size = Math.random() * 3 + 2;
+            particles.push(particle);
+        }
+        
+        return damagedEnemies;
+    } catch (error) {
+        console.error('Explosive damage application error:', error);
+        return [];
+    }
+}
+
 // ===== INPUT AND MOVEMENT =====
 
 // Handle player input
@@ -2455,14 +3459,96 @@ let lastShot = 0;
 function shootBullet() {
     try {
         const now = Date.now();
-        if (now - lastShot > GAME_CONFIG.SHOOT_COOLDOWN) {
-            const bulletX = player.x + player.width / 2 - 2;
-            const bulletY = player.y;
-            bullets.push(new Bullet(bulletX, bulletY));
+        const currentShootCooldown = getCurrentShootCooldown();
+        
+        if (now - lastShot > currentShootCooldown) {
+            const bulletPattern = getCurrentBulletPattern();
+            createBullets(bulletPattern);
             lastShot = now;
         }
     } catch (error) {
         console.error('Bullet shooting error:', error);
+    }
+}
+
+// Get current bullet pattern based on active power-ups
+function getCurrentBulletPattern() {
+    try {
+        // Check for Laser Beam power-up (highest priority)
+        if (powerUpManager && powerUpManager.initialized && powerUpManager.isPowerUpActive('LASER_BEAM')) {
+            return 'laser';
+        }
+        
+        // Check for Multi-Shot power-up
+        if (powerUpManager && powerUpManager.initialized && powerUpManager.isPowerUpActive('MULTI_SHOT')) {
+            return 'spread';
+        }
+        
+        return 'single'; // Default pattern
+    } catch (error) {
+        console.error('Bullet pattern calculation error:', error);
+        return 'single'; // Fallback to default
+    }
+}
+
+// Create bullets based on pattern
+function createBullets(pattern) {
+    try {
+        const centerX = player.x + player.width / 2;
+        const bulletY = player.y;
+        
+        switch (pattern) {
+            case 'laser':
+                // Laser Beam: Continuous laser (handled separately in laser system)
+                // No bullets created, laser is drawn directly
+                break;
+                
+            case 'spread':
+                // Multi-Shot: 3 bullets in spread pattern
+                const spreadAngle = 0.3; // Radians for spread
+                
+                // Center bullet
+                bullets.push(new Bullet(centerX - 2, bulletY, 0, -GAME_CONFIG.BULLET_SPEED));
+                
+                // Left bullet (angled)
+                const leftVelX = Math.sin(-spreadAngle) * GAME_CONFIG.BULLET_SPEED;
+                const leftVelY = -Math.cos(-spreadAngle) * GAME_CONFIG.BULLET_SPEED;
+                bullets.push(new Bullet(centerX - 2, bulletY, leftVelX, leftVelY));
+                
+                // Right bullet (angled)
+                const rightVelX = Math.sin(spreadAngle) * GAME_CONFIG.BULLET_SPEED;
+                const rightVelY = -Math.cos(spreadAngle) * GAME_CONFIG.BULLET_SPEED;
+                bullets.push(new Bullet(centerX - 2, bulletY, rightVelX, rightVelY));
+                break;
+                
+            case 'single':
+            default:
+                // Default single bullet
+                bullets.push(new Bullet(centerX - 2, bulletY));
+                break;
+        }
+    } catch (error) {
+        console.error('Bullet creation error:', error);
+        // Fallback to single bullet
+        const centerX = player.x + player.width / 2;
+        bullets.push(new Bullet(centerX - 2, player.y));
+    }
+}
+
+// Get current shoot cooldown based on active power-ups
+function getCurrentShootCooldown() {
+    try {
+        let cooldown = GAME_CONFIG.SHOOT_COOLDOWN;
+        
+        // Apply Rapid Fire effect if active
+        if (powerUpManager && powerUpManager.initialized && powerUpManager.isPowerUpActive('RAPID_FIRE')) {
+            cooldown = cooldown / 4; // 300% increase = 4x faster = 1/4 cooldown
+        }
+        
+        return cooldown;
+    } catch (error) {
+        console.error('Shoot cooldown calculation error:', error);
+        return GAME_CONFIG.SHOOT_COOLDOWN; // Fallback to default
     }
 }
 
@@ -2500,15 +3586,39 @@ function checkCollisions() {
                     bullets[i].y < enemies[j].y + enemies[j].height &&
                     bullets[i].y + bullets[i].height > enemies[j].y) {
                     
-                    // Create explosion
-                    createExplosion(enemies[j].x + enemies[j].width / 2, enemies[j].y + enemies[j].height / 2);
+                    // Get bullet impact position for explosive rounds
+                    const impactX = bullets[i].x + bullets[i].width / 2;
+                    const impactY = bullets[i].y + bullets[i].height / 2;
                     
-                    // Remove bullet and enemy
+                    // Remove bullet immediately
                     bullets.splice(i, 1);
-                    enemies.splice(j, 1);
                     
-                    // Increase score
-                    updateScore(10);
+                    // Check for explosive rounds effect
+                    if (player.explosiveRoundsActive) {
+                        // Apply area-of-effect damage
+                        applyExplosiveDamage(impactX, impactY, 50); // 50 pixel radius
+                    } else {
+                        // Normal single-target damage
+                        const enemyDestroyed = enemies[j].takeDamage(1);
+                        
+                        if (enemyDestroyed) {
+                            // Create explosion when enemy is destroyed
+                            createExplosion(enemies[j].x + enemies[j].width / 2, enemies[j].y + enemies[j].height / 2);
+                            
+                            // Try to spawn power-up at enemy location
+                            spawnPowerUp(enemies[j].x + enemies[j].width / 2 - 10, enemies[j].y + enemies[j].height / 2 - 10);
+                            
+                            // Remove destroyed enemy
+                            enemies.splice(j, 1);
+                            
+                            // Increase score
+                            updateScore(10);
+                        } else {
+                            // Enemy took damage but not destroyed - show health bar
+                            enemies[j].healthBarVisible = true;
+                        }
+                    }
+                    
                     break;
                 }
             }
@@ -2522,15 +3632,24 @@ function checkCollisions() {
                 enemies[i].y < player.y + player.height &&
                 enemies[i].y + enemies[i].height > player.y) {
                 
-                // Create explosion
-                createExplosion(player.x + player.width / 2, player.y + player.height / 2);
-                
-                // Remove enemy and reduce lives
-                enemies.splice(i, 1);
-                updateLives(-1);
-                
-                if (lives <= 0) {
-                    gameOver();
+                // Check if player has shield protection
+                if (player.invincible && player.shieldActive) {
+                    // Shield deflects the enemy - create shield impact effect
+                    createShieldImpactEffect(enemies[i].x + enemies[i].width / 2, enemies[i].y + enemies[i].height / 2);
+                    
+                    // Remove enemy but no damage to player
+                    enemies.splice(i, 1);
+                } else {
+                    // Normal collision - player takes damage
+                    createExplosion(player.x + player.width / 2, player.y + player.height / 2);
+                    
+                    // Remove enemy and reduce lives
+                    enemies.splice(i, 1);
+                    updateLives(-1);
+                    
+                    if (lives <= 0) {
+                        gameOver();
+                    }
                 }
             }
         }
@@ -2581,8 +3700,24 @@ function update() {
         
         // Update particles
         updateParticles();
+        
+        // Update power-ups
+        updatePowerUps();
+        
+        // Update laser beam
+        if (laserBeam && laserActive) {
+            laserBeam.update();
+        }
+        
+        // Update power-up manager (handle duration and expiration)
+        if (powerUpManager && powerUpManager.initialized) {
+            powerUpManager.updatePowerUps();
+        }
 
         checkCollisions();
+        
+        // Check power-up collisions
+        checkPowerUpCollisions();
     } catch (error) {
         console.error('Game update error:', error);
     }
@@ -2611,6 +3746,10 @@ function updateEnemies() {
         for (let i = enemies.length - 1; i >= 0; i--) {
             if (enemies[i]) {
                 enemies[i].update();
+                
+                // Update health bar visibility
+                enemies[i].updateHealthBarVisibility();
+                
                 if (enemies[i].y > canvasHeight) {
                     enemies.splice(i, 1);
                 }
@@ -2666,6 +3805,23 @@ function drawPlayer() {
     try {
         if (!ctx || !player) return;
         
+        // Add power-up visual effects if active
+        if (player.rapidFireActive) {
+            drawRapidFireEffect();
+        }
+        if (player.multiShotActive) {
+            drawMultiShotEffect();
+        }
+        if (player.laserBeamActive) {
+            drawLaserBeamEffect();
+        }
+        if (player.shieldActive) {
+            drawShieldEffect();
+        }
+        if (player.timeSlowActive) {
+            drawTimeSlowEffect();
+        }
+        
         // Use theme-based spaceship sprite if available
         if (themeManager && themeManager.isReady()) {
             const selectedSpaceship = themeManager.getSelectedSpaceship();
@@ -2674,6 +3830,29 @@ function drawPlayer() {
                 const spriteFunction = window[selectedSpaceship.sprite];
                 if (typeof spriteFunction === 'function') {
                     spriteFunction(ctx, player.x, player.y, player.width, player.height);
+                    
+                    // Add power-up glow to themed spaceship
+                    if (player.rapidFireActive || player.multiShotActive || player.laserBeamActive || player.shieldActive || player.timeSlowActive) {
+                        let glowColor = '#ffffff';
+                        const activeEffects = [
+                            player.rapidFireActive && '#ff6b00',
+                            player.multiShotActive && '#00ff6b', 
+                            player.laserBeamActive && '#6b00ff',
+                            player.shieldActive && '#00ffff',
+                            player.timeSlowActive && '#ffff00'
+                        ].filter(Boolean);
+                        
+                        if (activeEffects.length > 1) {
+                            glowColor = '#ffffff'; // White for multiple effects
+                        } else if (activeEffects.length === 1) {
+                            glowColor = activeEffects[0];
+                        }
+                        
+                        ctx.shadowColor = glowColor;
+                        ctx.shadowBlur = 20;
+                        spriteFunction(ctx, player.x, player.y, player.width, player.height);
+                        ctx.shadowBlur = 0;
+                    }
                     return;
                 }
             }
@@ -2683,13 +3862,313 @@ function drawPlayer() {
         ctx.fillStyle = player.color;
         ctx.fillRect(player.x, player.y, player.width, player.height);
         
-        // Add glow to player
-        ctx.shadowColor = player.color;
-        ctx.shadowBlur = 15;
+        // Add glow to player (enhanced if power-ups are active)
+        let glowColor = player.color;
+        let glowIntensity = 15;
+        
+        const activeEffects = [
+            player.rapidFireActive && '#ff6b00',
+            player.multiShotActive && '#00ff6b',
+            player.laserBeamActive && '#6b00ff',
+            player.shieldActive && '#00ffff',
+            player.timeSlowActive && '#ffff00'
+        ].filter(Boolean);
+        
+        if (activeEffects.length > 1) {
+            glowColor = '#ffffff'; // White for multiple effects
+            glowIntensity = 35;
+        } else if (activeEffects.length === 1) {
+            glowColor = activeEffects[0];
+            glowIntensity = 25;
+        }
+        
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = glowIntensity;
         ctx.fillRect(player.x, player.y, player.width, player.height);
         ctx.shadowBlur = 0;
     } catch (error) {
         console.error('Player draw error:', error);
+    }
+}
+
+// Draw rapid fire visual effect
+function drawRapidFireEffect() {
+    try {
+        if (!ctx || !player) return;
+        
+        const time = Date.now() * 0.01;
+        const centerX = player.x + player.width / 2;
+        const centerY = player.y + player.height / 2;
+        
+        // Draw pulsing energy rings around the player
+        for (let i = 0; i < 3; i++) {
+            const radius = 20 + (i * 8) + Math.sin(time + i) * 5;
+            const alpha = (Math.sin(time * 2 + i) + 1) * 0.3;
+            
+            ctx.globalAlpha = alpha;
+            ctx.strokeStyle = '#ff6b00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        
+        // Draw energy particles around the player
+        for (let i = 0; i < 8; i++) {
+            const angle = (time + i) * 0.5;
+            const distance = 25 + Math.sin(time * 3 + i) * 5;
+            const x = centerX + Math.cos(angle) * distance;
+            const y = centerY + Math.sin(angle) * distance;
+            const alpha = (Math.sin(time * 4 + i) + 1) * 0.5;
+            
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#ffaa00';
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.globalAlpha = 1; // Reset alpha
+    } catch (error) {
+        console.error('Rapid fire effect drawing error:', error);
+    }
+}
+
+// Draw multi-shot visual effect
+function drawMultiShotEffect() {
+    try {
+        if (!ctx || !player) return;
+        
+        const time = Date.now() * 0.008;
+        const centerX = player.x + player.width / 2;
+        const centerY = player.y + player.height / 2;
+        
+        // Draw three energy streams indicating the spread pattern
+        const spreadAngle = 0.3;
+        const streamLength = 40;
+        
+        for (let i = -1; i <= 1; i++) {
+            const angle = i * spreadAngle;
+            const startX = centerX + Math.sin(angle) * 15;
+            const startY = centerY - 10;
+            const endX = centerX + Math.sin(angle) * streamLength;
+            const endY = centerY - streamLength;
+            
+            // Animated energy stream
+            const alpha = (Math.sin(time * 3 + i) + 1) * 0.4 + 0.2;
+            ctx.globalAlpha = alpha;
+            
+            // Draw energy stream
+            const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+            gradient.addColorStop(0, '#00ff6b');
+            gradient.addColorStop(1, '#00ff6b00');
+            
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+            
+            // Add energy particles along the stream
+            for (let j = 0; j < 5; j++) {
+                const t = j / 4;
+                const particleX = startX + (endX - startX) * t;
+                const particleY = startY + (endY - startY) * t + Math.sin(time * 4 + j + i) * 3;
+                
+                ctx.fillStyle = '#00ff6b';
+                ctx.beginPath();
+                ctx.arc(particleX, particleY, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        ctx.globalAlpha = 1; // Reset alpha
+    } catch (error) {
+        console.error('Multi-shot effect drawing error:', error);
+    }
+}
+
+// Draw laser beam visual effect
+function drawLaserBeamEffect() {
+    try {
+        if (!ctx || !player) return;
+        
+        const time = Date.now() * 0.01;
+        const centerX = player.x + player.width / 2;
+        const centerY = player.y + player.height / 2;
+        
+        // Draw energy buildup at weapon ports
+        for (let i = 0; i < 2; i++) {
+            const offsetX = (i === 0 ? -8 : 8);
+            const x = centerX + offsetX;
+            const y = centerY - 5;
+            
+            // Pulsing energy orbs
+            const radius = 4 + Math.sin(time * 4 + i) * 2;
+            const alpha = (Math.sin(time * 3 + i) + 1) * 0.4 + 0.3;
+            
+            ctx.globalAlpha = alpha;
+            
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(0.5, '#6b00ff');
+            gradient.addColorStop(1, '#6b00ff00');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Draw energy field around player
+        const fieldRadius = 25 + Math.sin(time * 2) * 5;
+        const fieldAlpha = (Math.sin(time * 1.5) + 1) * 0.2;
+        
+        ctx.globalAlpha = fieldAlpha;
+        ctx.strokeStyle = '#6b00ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, fieldRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        ctx.globalAlpha = 1; // Reset alpha
+    } catch (error) {
+        console.error('Laser beam effect drawing error:', error);
+    }
+}
+
+// Draw shield visual effect
+function drawShieldEffect() {
+    try {
+        if (!ctx || !player) return;
+        
+        const time = Date.now() * 0.008;
+        const centerX = player.x + player.width / 2;
+        const centerY = player.y + player.height / 2;
+        
+        // Draw hexagonal shield barrier
+        const shieldRadius = 35 + Math.sin(time * 2) * 3;
+        const sides = 6;
+        const alpha = (Math.sin(time * 3) + 1) * 0.3 + 0.4;
+        
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        
+        for (let i = 0; i <= sides; i++) {
+            const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
+            const x = centerX + Math.cos(angle) * shieldRadius;
+            const y = centerY + Math.sin(angle) * shieldRadius;
+            
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        
+        // Draw energy nodes at shield vertices
+        for (let i = 0; i < sides; i++) {
+            const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
+            const x = centerX + Math.cos(angle) * shieldRadius;
+            const y = centerY + Math.sin(angle) * shieldRadius;
+            const nodeAlpha = (Math.sin(time * 4 + i) + 1) * 0.4 + 0.3;
+            
+            ctx.globalAlpha = nodeAlpha;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Draw inner energy field
+        const innerRadius = shieldRadius * 0.7;
+        const innerAlpha = (Math.sin(time * 1.5) + 1) * 0.15;
+        
+        ctx.globalAlpha = innerAlpha;
+        const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, innerRadius);
+        gradient.addColorStop(0, '#00ffff40');
+        gradient.addColorStop(1, '#00ffff00');
+        
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.globalAlpha = 1; // Reset alpha
+    } catch (error) {
+        console.error('Shield effect drawing error:', error);
+    }
+}
+
+// Draw time slow visual effect
+function drawTimeSlowEffect() {
+    try {
+        if (!ctx || !player) return;
+        
+        const time = Date.now() * 0.005; // Slower animation for time effect
+        const centerX = player.x + player.width / 2;
+        const centerY = player.y + player.height / 2;
+        
+        // Draw temporal distortion rings
+        for (let i = 0; i < 4; i++) {
+            const radius = 20 + (i * 12) + Math.sin(time + i * 0.5) * 8;
+            const alpha = (Math.sin(time * 1.5 + i) + 1) * 0.2 + 0.1;
+            
+            ctx.globalAlpha = alpha;
+            ctx.strokeStyle = '#ffff00';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]); // Dashed lines for temporal effect
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        
+        ctx.setLineDash([]); // Reset line dash
+        
+        // Draw clock-like temporal indicators
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2 + time;
+            const distance = 30 + Math.sin(time * 2 + i) * 5;
+            const x = centerX + Math.cos(angle) * distance;
+            const y = centerY + Math.sin(angle) * distance;
+            const alpha = (Math.sin(time * 3 + i) + 1) * 0.4 + 0.2;
+            
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw connecting lines to center
+            ctx.strokeStyle = '#ffff0080';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+        }
+        
+        // Draw central time vortex
+        const vortexAlpha = (Math.sin(time * 4) + 1) * 0.3 + 0.2;
+        ctx.globalAlpha = vortexAlpha;
+        
+        const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 15);
+        gradient.addColorStop(0, '#ffffff');
+        gradient.addColorStop(0.5, '#ffff00');
+        gradient.addColorStop(1, '#ffff0000');
+        
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 15, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.globalAlpha = 1; // Reset alpha
+    } catch (error) {
+        console.error('Time slow effect drawing error:', error);
     }
 }
 
@@ -2716,6 +4195,18 @@ function drawGameObjects() {
                 particle.draw();
             }
         });
+        
+        // Draw power-ups
+        powerUps.forEach(powerUp => {
+            if (powerUp && powerUp.draw) {
+                powerUp.draw();
+            }
+        });
+        
+        // Draw laser beam (drawn after other objects for proper layering)
+        if (laserBeam && laserActive) {
+            laserBeam.draw();
+        }
     } catch (error) {
         console.error('Game objects draw error:', error);
     }
@@ -2804,8 +4295,14 @@ function restartGame() {
             bullets = [];
             enemies = [];
             particles = [];
+            powerUps = [];
             lastEnemySpawn = 0;
             enemySpawnRate = GAME_CONFIG.INITIAL_ENEMY_SPAWN_RATE;
+            
+            // Clear all active power-ups
+            if (powerUpManager && powerUpManager.initialized) {
+                powerUpManager.clearAllPowerUps();
+            }
             
             // Reset player position
             if (player && player.reset) {
@@ -2911,6 +4408,25 @@ function initializeThemeManager() {
     }
 }
 
+// Initialize power-up manager
+function initializePowerUpManager() {
+    try {
+        // Create power-up manager instance
+        powerUpManager = new PowerUpManager();
+        
+        // Initialize the power-up manager
+        if (!powerUpManager.initialize()) {
+            throw new Error('Failed to initialize PowerUpManager');
+        }
+        
+        console.log('Power-up manager initialized successfully');
+        return true;
+    } catch (error) {
+        console.error('Power-up manager initialization failed:', error);
+        return false;
+    }
+}
+
 // Initialize and start game
 function initializeGame() {
     try {
@@ -2938,6 +4454,12 @@ function initializeGame() {
         // Initialize theme manager
         if (!initializeThemeManager()) {
             console.error('Failed to initialize theme manager');
+            return false;
+        }
+        
+        // Initialize power-up manager
+        if (!initializePowerUpManager()) {
+            console.error('Failed to initialize power-up manager');
             return false;
         }
         
